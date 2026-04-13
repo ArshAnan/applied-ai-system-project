@@ -19,41 +19,75 @@ This version builds a content-based music recommender that scores songs from a 1
 
 Real-world music recommenders like Spotify combine two strategies. **Collaborative filtering** finds patterns across millions of users ("people who liked X also liked Y"), while **content-based filtering** compares the actual attributes of songs — tempo, energy, mood, genre — against a user's known preferences. At scale, Spotify layers deep learning on top of raw audio to detect sonic similarity beyond what any single label captures. This simulator focuses on the content-based approach: it scores every song numerically against a user profile and returns the best matches.
 
+### Data flow
+
+```mermaid
+flowchart TD
+    A["User Profile\nfavorite_genre, favorite_mood\ntarget_energy, target_valence\nlikes_acoustic"] --> C
+    B["songs.csv\n18 songs\ngenre · mood · energy\nvalence · acousticness"] --> C
+
+    C["For each song in catalog..."] --> D["Genre match?\n+2.0 pts if yes"]
+    C --> E["Mood match?\n+1.0 pts if yes"]
+    C --> F["Energy closeness\n+0–1.5 pts\n1.5 × (1 - |song − user|)"]
+    C --> G["Valence closeness\n+0–0.5 pts\n0.5 × (1 - |song − user|)"]
+    C --> H["Acoustic bonus\n+0.5 pts if likes_acoustic\nand acousticness > 0.6"]
+
+    D & E & F & G & H --> I["Song Score\n(max 5.5 pts)"]
+    I --> J["Collect all 18 scores"]
+    J --> K["Sort descending by score"]
+    K --> L["Return Top-K songs\nwith scores + explanation"]
+```
+
 ### Song features used
 
-Each `Song` object stores these attributes:
+Each `Song` object stores these attributes from `data/songs.csv`:
 
-- `genre` — categorical (pop, lofi, rock, ambient, etc.)
-- `mood` — categorical (happy, chill, intense, relaxed, moody, focused)
-- `energy` — float 0–1 (how driving/intense the track feels)
-- `valence` — float 0–1 (musical positivity/happiness)
-- `acousticness` — float 0–1 (acoustic vs. electronic character)
-- `danceability`, `tempo_bpm` — stored but used as secondary signals
+| Feature | Type | Role in scoring |
+|---|---|---|
+| `genre` | categorical | Flat +2.0 bonus on exact match — strongest signal |
+| `mood` | categorical | Flat +1.0 bonus on exact match — second strongest |
+| `energy` | float 0–1 | Closeness reward: up to +1.5 pts |
+| `valence` | float 0–1 | Closeness reward: up to +0.5 pts |
+| `acousticness` | float 0–1 | Binary bonus: +0.5 if user likes acoustic |
+| `danceability`, `tempo_bpm` | float / int | Stored, available for future weighting |
 
 ### UserProfile stores
 
-- `favorite_genre` — the genre to reward most
-- `favorite_mood` — the mood/vibe to reward
-- `target_energy` — ideal energy level (0–1)
-- `likes_acoustic` — boolean preference for acoustic sound
-
-### Scoring Rule (one song)
-
-For categorical features, a match adds a flat bonus. For numerical features, closeness is rewarded using `1 - |song_value - user_preference|` so a perfect match scores 1.0 and a complete mismatch scores 0.0:
-
-```
-score = 3.0 × (genre match)
-      + 2.0 × (mood match)
-      + 2.0 × (1 - |song.energy - user.target_energy|)
-      + 1.0 × (1 - |song.valence - 0.7|)   ← default positivity target
-      + 1.0 × (acoustic bonus if user.likes_acoustic)
+```python
+user_prefs = {
+    "genre": "lofi",        # categorical — exact match check
+    "mood": "chill",         # categorical — exact match check
+    "energy": 0.40,          # float 0–1 — reward closeness
+    "valence": 0.60,         # float 0–1 — reward closeness
+    "likes_acoustic": True,  # bool — enables acoustic bonus
+}
 ```
 
-Genre carries the highest weight (3 pts) because listeners tend to stay within genres most consistently. Mood is second (2 pts). Energy closeness matters more than valence (2 vs. 1 pt) because energy strongly predicts activity fit.
+### Algorithm Recipe (finalized)
 
-### Ranking Rule (choosing what to show)
+```
+score(song, user) =
+    2.0  ×  (1 if song.genre == user.genre else 0)
+  + 1.0  ×  (1 if song.mood  == user.mood  else 0)
+  + 1.5  ×  (1 - |song.energy      - user.energy|)
+  + 0.5  ×  (1 - |song.valence     - user.valence|)
+  + 0.5  ×  (1 if user.likes_acoustic and song.acousticness > 0.6 else 0)
+```
 
-Once every song has a score, the system sorts the full list in descending order and returns the top-k results. The Scoring Rule answers "how good is *this* song?"; the Ranking Rule answers "which songs do I actually show?" — two separate operations chained together.
+**Maximum possible score: 5.5**
+
+The closeness formula `1 - |song_value - user_value|` rewards *similarity*, not just "higher is better" — a user wanting low-energy music (0.40) scores a calm song (0.35) much higher than a driving one (0.91).
+
+### Ranking Rule
+
+After scoring all 18 songs, the list is sorted in descending order and the top-k are returned. Scoring answers "how good is this one song?"; ranking answers "which songs do I actually show?" — two separate operations chained together.
+
+### Known biases in this design
+
+- **Genre dominance**: genre carries 2 of the 5.5 max points. A song can score 3.5 on energy + valence + acoustic alone, but genre match is still the single biggest swing. A great mood/energy match in the wrong genre will consistently rank below a mediocre same-genre song.
+- **Mood is binary**: there is no partial credit for "relaxed" being close to "chill" — the system treats all mood mismatches equally.
+- **Catalog skew**: the 18-song dataset over-represents lofi (3 songs) and pop (2). A lofi user will almost always get lofi songs back, not because the algorithm is wrong, but because there are more lofi options to choose from.
+- **No history**: every run starts fresh with the same static profile. There is no learning from skips or replays.
 
 ---
 
