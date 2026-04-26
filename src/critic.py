@@ -22,6 +22,7 @@ Your job is to judge whether the recommendations genuinely match the user's inte
 
 Return ONLY a valid JSON object with exactly these keys:
 - "verdict": one of "good", "mixed", or "poor"
+- "confidence": float 0.0-1.0 reflecting how well the top-5 collectively match the request (1.0 = perfect match, 0.0 = no songs match at all)
 - "flags": a list of plain-English strings describing specific mismatches (empty list if none)
 - "explanation": 1-2 sentences addressed to the user explaining why these picks fit (or don't fit) their request
 
