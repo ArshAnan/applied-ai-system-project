@@ -310,6 +310,41 @@ The unit tests confirmed the scoring engine is deterministic, correct, and safe 
 
 ---
 
+## Responsible AI
+
+### Limitations and biases
+
+**Genre dominance creates a filter bubble.** Genre is worth 2.0 out of a maximum 5.5 points — more than any other single feature. In the adversarial test, a user who explicitly asked for high-energy (0.92) music received a soft acoustic ballad with energy 0.30 as the top result, purely because the genre and mood labels matched. The algorithm was doing exactly what the weights told it to do. The weights were the problem.
+
+**Mood matching is binary with no spectrum.** "Relaxed" and "chill" are treated as completely different moods. A user asking for "relaxed" music gets zero credit for songs tagged "chill," even though most people consider them interchangeable. This forces recommendations into rigid label buckets that do not reflect how people actually think about music.
+
+**Catalog skew advantages some users over others.** Lofi has 3 songs in the catalog. Electronic has 1. A lofi listener will almost always get accurate results; an electronic listener will almost always see songs from other genres in their top 5. This is not a flaw in the algorithm — it is a flaw in the data. But the user experiences both the same way: as a recommendation. A system that consistently works better for one group than another is unfair regardless of whether the cause is code or data.
+
+**The extractor inherits whatever biases Gemini has.** When a user types "music for a house party," the model decides what genre and mood that implies. Those decisions reflect patterns in Gemini's training data — which skews toward English-language, Western music contexts. A user describing a cultural tradition or a genre that is underrepresented in that training data may get a less accurate profile extracted, through no fault of their own.
+
+### Could this system be misused?
+
+VibeFinder is low-stakes — the worst realistic outcome is a bad song recommendation. But the patterns here apply directly to higher-stakes systems:
+
+- A scoring system that weights one categorical feature too heavily (as genre is here) will systematically disadvantage users who do not fit the dominant category. In a hiring tool, that category might be job title or school name.
+- A natural language extractor that interprets ambiguous input in a culturally specific way will serve some users better than others without any visible signal that it is doing so.
+
+For this specific system, the main prevention is transparency: every recommendation comes with a score breakdown and an AI critic verdict that names mismatches explicitly. A user who gets a bad recommendation can read exactly why. That is not a substitute for fixing the underlying bias, but it is the minimum bar for any system that claims to explain its decisions.
+
+### What surprised me during reliability testing
+
+The most surprising result was that every verdict in the batch evaluation came back MIXED — not because any single query failed, but because the catalog's size made a "good" verdict structurally impossible for genres with only one song. The algorithm and extractor both performed correctly. The system still could not satisfy the request. Testing revealed that the bottleneck was not in any code I wrote.
+
+The second surprise was the extraction miss on "relaxing classical music." The extractor returned `mood: relaxed` rather than the expected `mood: chill`. This is technically correct — "relaxing" and "relaxed" are closer to the truth than "chill" — but the catalog uses "chill" as its label for that mood type, so the mismatch caused a scoring penalty. The AI interpreted the user's words accurately but was misaligned with the catalog's vocabulary. That gap between natural language and a fixed label taxonomy is a real problem in production recommender systems.
+
+### Collaboration with AI during this project
+
+**One helpful suggestion:** When designing the pipeline, Claude suggested splitting the natural language parsing and the recommendation review into two completely separate Gemini calls rather than one combined prompt. The reasoning was that each call should have exactly one job — extract structured data, or evaluate a list — so each could be tested and improved independently. That decision held up throughout development. The extractor and critic are easier to debug, easier to prompt-tune, and easier to replace individually precisely because they were never tangled together.
+
+**One flawed suggestion:** Claude wrote the initial version of `test_unknown_genre_does_not_crash` with the assertion `assert top_score < 2.0`, reasoning that if no genre match fires, the top score cannot exceed the genre bonus threshold. This was wrong. Mood match (+1.0), energy fit (+1.5), valence fit (+0.5), and acoustic bonus (+0.5) can sum to 3.5 without any genre match at all — the test failed immediately when run against the real catalog. The fix was straightforward (assert that no returned song carries the missing genre label instead), but it was a reminder that AI-generated test assertions need to be checked against the actual scoring math, not just accepted because they look reasonable.
+
+---
+
 ## Reflection
 
 Building VibeFinder 2.0 clarified something that VibeFinder 1.0 only hinted at: the interesting problems in AI systems are not the AI parts.
